@@ -1,0 +1,141 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      clean:
+        description: 'Clean build (discard cache)'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Free Disk Space and Set up Swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache buildozer
+        if: ${{ !inputs.clean }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: bd-${{ hashFiles('buildozer.spec', 'recipes/**') }}
+          restore-keys: bd-
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip autoconf automake libtool \
+            gettext autopoint pkg-config zlib1g-dev libncurses5-dev \
+            libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev ccache
+          pip install --upgrade pip setuptools wheel
+          pip install buildozer==1.5.0 "cython>=3.0.11" virtualenv
+
+      - name: Verify Java version
+        run: |
+          echo "JAVA_HOME = $JAVA_HOME"
+          java -version
+
+      - name: Clean if requested
+        if: ${{ inputs.clean }}
+        run: rm -rf .buildozer ~/.buildozer
+
+      - name: Pre-fetch freetype
+        run: |
+          set -e
+          DIR=".buildozer/android/platform/build-arm64-v8a/packages/freetype"
+          F="freetype-2.14.1.tar.gz"
+          mkdir -p "$DIR"
+          if [ -s "$DIR/$F" ]; then
+            echo "already cached"
+          else
+            for U in \
+              "https://download-mirror.savannah.gnu.org/releases/freetype/$F" \
+              "https://downloads.sourceforge.net/project/freetype/freetype2/2.14.1/$F" \
+              "https://mirror.easyname.at/nongnu/freetype/$F" \
+              "https://download.savannah.gnu.org/releases/freetype/$F" ; do
+              echo "try: $U"
+              curl -fL --retry 3 --connect-timeout 20 -o "$DIR/$F" "$U" && break
+            done
+          fi
+          test -s "$DIR/$F"
+          touch "$DIR/.mark-$F"
+          ls -la "$DIR"
+
+      - name: Fetch camerax_provider
+        run: |
+          set -e
+          rm -rf camerax_provider /tmp/cxp
+          git clone --depth 1 https://github.com/Android-for-Python/camerax_provider.git /tmp/cxp
+          rm -rf /tmp/cxp/.git
+          cp -r /tmp/cxp camerax_provider
+          ls -la camerax_provider
+
+      - name: Build APK
+        run: |
+          export PATH=$PATH:~/.local/bin
+          set -o pipefail
+          ok=0
+          for i in 1 2 3; do
+            echo "===== build attempt $i ====="
+            if buildozer android debug 2>&1 | tee build.log; then
+              ok=1
+              break
+            fi
+            echo "failed - retry in 60s"
+            sleep 60
+          done
+          [ "$ok" = "1" ]
+
+      - name: Show error summary
+        if: failure()
+        run: |
+          echo "===== disk ====="
+          df -h /
+          echo "===== error candidates ====="
+          grep -n -E "^\[ERROR\]|FAILURE: Build failed|What went wrong|Traceback|fatal error:|Killed|No space left|Can't open patch|HTTP Error|not a supported wheel" build.log | grep -v "config.pxi" | tail -40 || true
+          echo "===== last 80 lines ====="
+          tail -80 build.log || true
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lotto-apk
+          path: bin/*.apk
+          if-no-files-found: warn
+
+      - name: Upload full log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
