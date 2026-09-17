@@ -102,10 +102,16 @@ jobs:
       - name: Build APK
         run: |
           export PATH=$PATH:~/.local/bin
+          # p4a 가 venv 안에서 'pip install -U pip' 를 돌리다 pip 이 깨진다.
+          # 알려진 버전으로 묶어 자기 갱신 사고를 막는다.
+          echo "pip==25.2" > $PWD/pip-constraint.txt
+          export PIP_CONSTRAINT=$PWD/pip-constraint.txt
           set -o pipefail
           ok=0
           for i in 1 2 3; do
             echo "===== build attempt $i ====="
+            # 깨진 venv 가 남아 있으면 재시도해도 같은 곳에서 죽는다.
+            rm -rf .buildozer/android/platform/build-*/build/venv
             if buildozer android debug 2>&1 | tee build.log; then
               ok=1
               break
@@ -114,7 +120,7 @@ jobs:
             sleep 60
           done
           [ "$ok" = "1" ]
-
+          
       - name: Show error summary
         if: failure()
         run: |
