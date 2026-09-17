@@ -104,7 +104,7 @@ jobs:
           export PATH=$PATH:~/.local/bin
           # p4a 가 venv 안에서 'pip install -U pip' 를 돌리다 pip 이 깨진다.
           # 알려진 버전으로 묶어 자기 갱신 사고를 막는다.
-          echo "pip==25.2" > $PWD/pip-constraint.txt
+          printf 'pip==25.2\ncharset-normalizer==3.4.1\n' > $PWD/pip-constraint.txt
           export PIP_CONSTRAINT=$PWD/pip-constraint.txt
           set -o pipefail
           ok=0
